@@ -13,6 +13,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 	_ "github.com/mattn/go-sqlite3"
 	sw "go-template/switcher"
+	upload "go-template/upload"
 	"io"
 	"log"
 	"net/http"
@@ -26,8 +27,9 @@ type Ret struct {
 
 func main() {
 	rt := httprouter.New()
-	rt.GET("/tmpl", DlmHandler)
 	rt.GET("/", AuthHandler)
+	rt.GET("/tmpl", DlmHandler)
+	rt.POST("/upload", upload.UploadHandler)
 
 	n := negroni.Classic()
 
