@@ -1,0 +1,90 @@
+1. negroni-sessions工作原理
+	negroni-sessions的Sessions返回negroni.HandlerFunc，也就是说是negroni的路由中间件。其中新建的s对象是本插件中的seesion对象，结构如下：
+	type session struct {
+		name String
+		request *http.Request
+		store Store # Store是interface，包含Get、New、Save函数
+		session *sessions.Session # sessions是gorrila/Sessions
+		written bool
+	}
+	s := &session{name, r, store, nil, false}
+	该中间件会执行一次保存:
+	s.Session().Save(r, res)
+	其中Session()函数定义如下，返回gorilla/Sessions的Session对象
+	func (s *session) Session() *sessions.Session {
+		if s.session == nil {
+			var err error
+			s.session, err = s.store.Get(s.request, s.name)
+			check(err) // 错误处理
+		}
+		return s.session
+	}
+	因此事实上gorilla/Session的对象有Save的功能，并且来自于Store对象的Get。
+
+2. Store对象
+	这里的Store对象来自如下：
+	store := cookiestore.New([]byte("some_secret_code"))
+	这个cookiestore其实是调用了gorilla/Sessions里的store.go中的NewCooieStore，返回*CookieStore对象，结构如下：
+	type CookieStore struct {
+		Codecs []securecookie.Codec
+		Options *Options
+	}
+	但是，这个CookieStore对象并没有哪里可以存储Session的，事实上它的Get方法是这样的：
+	func (s *CookieStore) Get(r *http.Request, name string) (*Session, err) {
+		return GetRegistry(r).Get(s, name)
+	}
+	而GetRegistry的定义如下：
+	func GetRegistry(r *http.Request) *Registry {
+		registry := context.Get(r, registryKey)
+		if registry != nil {
+			return registry.(*Registry)
+		}
+		newRegistry := Registry{
+			request: r,
+			session: make(map[string]sessionInfo)
+		}
+		context.Set(r, registryKey, newRegistry)
+		return newRegistry
+	}
+	这里又多出一个Registry结构来：
+	type Registry struct {
+		request *http.Request
+		sessions map[string]sessionInfo
+	}
+	sessionInfo的结构如下，其实就是gorilla/Session加一个error：
+	type sessionInfo struct {
+		s *Session
+		e error
+	}
+	也就是说，针对每个request，都会有一个系统的registery对应。
+	func (s *Register) Get(store Store, name string) (session *Session, err error) {
+		if info, ok := s.sessions[name]; ok {
+			session, err = info.s, info.e
+		} else {
+			session, err = store.New(s.request, name)
+			session.name = name
+			s.sessions[name] = sessionInfo{s: session, e: err}
+		}
+		session.store = store
+		return
+	}
+	如果在registry的sessions中没有找到name所对应的session，则新建session，此时又落到了store对象来了，这次涉及到New方法。
+	所以，最终这个从negroni-sessions的对象s取Session()的逻辑是这样的：
+	s.Session() -> s.store.Get(s.r, s.name) -> GetRegistry(r).Get(s, name) ?-> (session,err)/store.New(s, name)
+	这个New方法中使用了gorrila/sessions中的NewSession函数，另外还验证了这个session是不是新的。个人认为，可以在第一次连接的时候，通过检查session的IsNew来判断是否有威胁，然并卵。
+
+3. gorilla/Session的Save
+	Session的数据结构如下：
+	type Session struct {
+		ID string
+		Value map[interface{}]interface{}
+		Options *Options
+		IsNew bool
+		store Store
+		name string
+	}
+	Session的Save函数如下：
+	func (s *Session) Save(r *http.request, w http.ResponseWriter) error {
+		return s.store.Save(r, w, s)
+	}
+	CookieStore是通过http.SetCookie来保存的，事实上数据是保存在客户端的。
