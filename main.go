@@ -79,6 +79,9 @@ func DlmHandler(rw http.ResponseWriter, r *http.Request, p httprouter.Params) {
 
 	LogClient(r.RemoteAddr, db)
 
+	// print query string
+	log.Println(r.URL.RawQuery)
+
 	switcher := sw.Dispatch(db)
 	var ret []byte
 	if Authorize(r) {
